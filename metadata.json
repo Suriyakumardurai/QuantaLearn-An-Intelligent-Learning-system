@@ -1,0 +1,5 @@
+{
+  "name": "QuantaLearn",
+  "description": "An intelligent diagnostic system for real-time knowledge quantification and curated learning paths, powered by Google Gemini. Users must provide their own Gemini API key to access the platform.",
+  "requestFramePermissions": []
+}

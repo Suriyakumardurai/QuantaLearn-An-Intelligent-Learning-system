@@ -63,7 +63,7 @@ const quizSchema = {
         type: Type.OBJECT,
         properties: {
           question: { type: Type.STRING },
-          type: { type: Type.STRING, enum: [QuizType.MCQ, QuizType.MSQ, QuizType.FIB] },
+          type: { type: Type.STRING, enum: [QuizType.MCQ, QuizType.MSQ] },
           options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
           correctAnswers: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
@@ -182,8 +182,7 @@ export const generateModuleContentAndQuiz = async (apiKey: string, courseTitle: 
     **QUIZ REQUIREMENTS:**
     - The "quiz" value must be a JSON object matching the provided quiz schema.
     - Create a quiz with 5-7 questions based *only* on the content you have just generated.
-    - The quiz must include a mix of question types: Multiple Choice (MCQ), Multiple Select (MSQ), and Fill-in-the-blanks (FIB).
-    - For FIB, provide the blank as '___'.
+    - The quiz must include a mix of question types: Multiple Choice (MCQ) and Multiple Select (MSQ).
     `;
     
     const prompt = `Generate the content and a quiz for the module "${moduleTitle}" which is part of the course "${courseTitle}".`;
@@ -217,8 +216,7 @@ export const generateMockTest = async (apiKey: string, courseTitle: string, modu
     **MOCK TEST REQUIREMENTS:**
     - The test should have a minimum of 10 questions to be comprehensive.
     - The questions must be based on the collective titles and objectives of ALL modules in the course.
-    - The quiz must include a mix of question types: Multiple Choice (MCQ), Multiple Select (MSQ), and Fill-in-the-blanks (FIB).
-    - For FIB, provide the blank as '___'.
+    - The quiz must include a mix of question types: Multiple Choice (MCQ) and Multiple Select (MSQ).
     - Ensure all mathematical notations in questions and options are formatted using LaTeX.
     - The difficulty should be appropriate for a final assessment to test mastery.
     `;

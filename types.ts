@@ -11,7 +11,6 @@ export interface User {
 export enum QuizType {
   MCQ = 'MCQ', // Multiple Choice Question
   MSQ = 'MSQ', // Multiple Select Question
-  FIB = 'FIB', // Fill In The Blanks,
 }
 
 export interface Question {
@@ -41,6 +40,7 @@ export interface Module {
   isCompleted: boolean;
   generationState: GenerationState;
   quizScore?: number;
+  quizAttempts?: number;
 }
 
 export interface Badge {

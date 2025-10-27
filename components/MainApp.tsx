@@ -1,8 +1,9 @@
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Course, User, Module, Quiz, Question, QuizType, GenerationState, Badge, LearningPath } from '../types';
 import { generateCourseOutline, generateModuleContentAndQuiz, clarifyDoubt, generateLearningPathOutline, generateMockTest } from '../services/geminiService';
 import { fileToBase64 } from '../utils/helpers';
-import { BrainCircuitIcon, BookOpenIcon, CheckCircleIcon, AwardIcon, LoaderIcon, KeyIcon, WorldLoader, LightbulbIcon, DocumentTextIcon, LockClosedIcon, ArrowPathIcon, QuestionMarkCircleIcon, UserCircleIcon, MenuIcon, ChevronDownIcon, RectangleStackIcon } from './Icons';
+import { BrainCircuitIcon, BookOpenIcon, CheckCircleIcon, AwardIcon, LoaderIcon, KeyIcon, WorldLoader, LightbulbIcon, DocumentTextIcon, LockClosedIcon, ArrowPathIcon, QuestionMarkCircleIcon, UserCircleIcon, MenuIcon, ChevronDownIcon, RectangleStackIcon, PlayIcon, PauseIcon, StopIcon } from './Icons';
 
 // Declare marked and MathJax for TypeScript since they're loaded from a script tag
 declare global {
@@ -255,7 +256,7 @@ const Breadcrumbs: React.FC<{
                         <a href="#" onClick={(e) => { e.preventDefault(); handleCourseClick(); }} className={`hover:text-accent truncate max-w-[150px] md:max-w-xs ${!activeModule ? 'text-text-primary' : ''}`}>{activeCourse.title}</a>
                     </li>
                 )}
-                {activeCourse && activeModule && ['module', 'quiz', 'quiz_results', 'mock_test', 'mock_test_results'].includes(view) && (
+                {activeCourse && activeModule && ['module', 'quiz', 'quiz_results', 'quiz_answers', 'mock_test', 'mock_test_results'].includes(view) && (
                      <li className="flex items-center">
                         <span className="mx-2">/</span>
                         <span className="text-text-primary truncate max-w-[150px] md:max-w-xs">{activeModule.module.title}</span>
@@ -791,7 +792,36 @@ const ModuleView: React.FC<{
 }> = ({ activeModule, setView, apiKey }) => {
     const [isDoubtModalOpen, setIsDoubtModalOpen] = useState(false);
     const contentRef = useRef<HTMLDivElement>(null);
+    const [ttsState, setTtsState] = useState<'idle' | 'playing' | 'paused'>('idle');
+    const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
+    const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+    const [currentWordIndex, setCurrentWordIndex] = useState(-1);
+    const wordOffsetsRef = useRef<{start: number, end: number}[]>([]);
     
+    useEffect(() => {
+        const getAndSetVoice = () => {
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length === 0) return;
+
+            const bestVoice = 
+                voices.find(v => v.lang === 'en-US' && v.name === 'Google US English') ||
+                voices.find(v => v.lang === 'en-US' && v.name.toLowerCase().includes('male')) ||
+                voices.find(v => v.lang === 'en-US') ||
+                voices[0];
+
+            setSelectedVoice(bestVoice);
+        };
+
+        getAndSetVoice();
+        if (speechSynthesis.onvoiceschanged !== undefined) {
+            speechSynthesis.onvoiceschanged = getAndSetVoice;
+        }
+
+        return () => {
+            window.speechSynthesis.cancel();
+        };
+    }, []);
+
     const subModules = useMemo(() => {
         if (!activeModule?.content) return [];
         
@@ -836,37 +866,167 @@ const ModuleView: React.FC<{
     
     const [activeSubModuleTitle, setActiveSubModuleTitle] = useState<string>('');
 
+    const activeSubModule = useMemo(() => {
+        return subModules.find(sub => sub.title === activeSubModuleTitle);
+    }, [activeSubModuleTitle, subModules]);
+
     useEffect(() => {
         if (subModules.length > 0) {
             setActiveSubModuleTitle(subModules[0].title);
         }
     }, [subModules]);
 
-    const activeSubModule = useMemo(() => {
-        return subModules.find(sub => sub.title === activeSubModuleTitle);
-    }, [activeSubModuleTitle, subModules]);
+    useEffect(() => {
+        window.speechSynthesis.cancel();
+        setTtsState('idle');
+        setCurrentWordIndex(-1);
+    }, [activeSubModule]);
+
+    const parsedContent = useMemo(() => {
+        if (!activeSubModule) return '';
+        const rawHtml = window.marked.parse(activeSubModule.content);
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = rawHtml;
+        
+        tempDiv.querySelectorAll('a').forEach(a => {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        });
+
+        let wordIndex = 0;
+        const walker = document.createTreeWalker(tempDiv, NodeFilter.SHOW_TEXT, null);
+        // FIX: Explicitly type `node` as `Node | null` to fix TypeScript error.
+        let node: Node | null;
+        const nodesToReplace: { oldNode: Node, newNode: DocumentFragment }[] = [];
+
+        while((node = walker.nextNode())) {
+            if (node.parentElement?.closest('pre, code, script, style')) continue;
+            const text = node.textContent || '';
+            if (text.trim().length === 0) continue;
+
+            const fragment = document.createDocumentFragment();
+            const words = text.split(/(\s+)/);
+
+            words.forEach(word => {
+                if (word.trim().length > 0) {
+                    const span = document.createElement('span');
+                    span.id = `word-${wordIndex++}`;
+                    span.textContent = word;
+                    fragment.appendChild(span);
+                } else {
+                    fragment.appendChild(document.createTextNode(word));
+                }
+            });
+            nodesToReplace.push({ oldNode: node, newNode: fragment });
+        }
+        
+        nodesToReplace.forEach(({ oldNode, newNode }) => {
+            oldNode.parentNode?.replaceChild(newNode, oldNode);
+        });
+
+        return tempDiv.innerHTML;
+    }, [activeSubModule]);
 
     useEffect(() => {
-        if (activeSubModule && contentRef.current && window.MathJax) {
+        if (contentRef.current && window.MathJax) {
             try {
                 window.MathJax.typeset();
             } catch (error) {
                 console.error("MathJax rendering error:", error);
             }
         }
-    }, [activeSubModule]);
+    }, [parsedContent]);
 
+    useEffect(() => {
+        if (!contentRef.current) return;
+
+        const previousHighlight = contentRef.current.querySelector('.tts-highlight');
+        if (previousHighlight) {
+            previousHighlight.classList.remove('tts-highlight');
+        }
+
+        if (currentWordIndex >= 0) {
+            const currentWordEl = contentRef.current.querySelector<HTMLElement>(`#word-${currentWordIndex}`);
+            if (currentWordEl) {
+                currentWordEl.classList.add('tts-highlight');
+                
+                const mainScrollArea = document.querySelector('main.overflow-y-auto');
+                if (mainScrollArea) {
+                    const elementRect = currentWordEl.getBoundingClientRect();
+                    const parentRect = mainScrollArea.getBoundingClientRect();
+                    if (elementRect.top < parentRect.top || elementRect.bottom > parentRect.bottom) {
+                        currentWordEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+                    }
+                }
+            }
+        }
+    }, [currentWordIndex]);
+
+    const handlePlayPause = useCallback(() => {
+        if (ttsState === 'playing') {
+            window.speechSynthesis.pause();
+            return;
+        } 
+        if (ttsState === 'paused') {
+            window.speechSynthesis.resume();
+            return;
+        }
+        if (activeSubModule && ttsState === 'idle' && contentRef.current) {
+            window.speechSynthesis.cancel();
+            
+            const wordElements = Array.from(contentRef.current.querySelectorAll<HTMLSpanElement>('[id^="word-"]'));
+            if (wordElements.length === 0) return;
+
+            const textForSynthesis: string[] = [];
+            const offsets: {start: number, end: number}[] = [];
+            let charCount = 0;
+
+            wordElements.forEach(el => {
+                const word = el.textContent || '';
+                textForSynthesis.push(word);
+                offsets.push({ start: charCount, end: charCount + word.length });
+                charCount += word.length + 1;
+            });
+            
+            const fullText = textForSynthesis.join(' ');
+            wordOffsetsRef.current = offsets;
+            if (!fullText.trim()) return;
+
+            const utterance = new SpeechSynthesisUtterance(fullText);
+            utteranceRef.current = utterance;
+
+            if (selectedVoice) utterance.voice = selectedVoice;
+
+            utterance.onboundary = (event) => {
+                const charIndex = event.charIndex;
+                const wordIndex = wordOffsetsRef.current.findIndex(offset => charIndex >= offset.start && charIndex < offset.end + 1);
+                if (wordIndex !== -1) setCurrentWordIndex(wordIndex);
+            };
+
+            utterance.onstart = () => setTtsState('playing');
+            utterance.onpause = () => setTtsState('paused');
+            utterance.onresume = () => setTtsState('playing');
+            utterance.onend = () => {
+                setTtsState('idle');
+                setCurrentWordIndex(-1);
+            };
+            utterance.onerror = (e) => {
+                console.error("Speech synthesis error", e);
+                setTtsState('idle');
+                setCurrentWordIndex(-1);
+            };
+            
+            window.speechSynthesis.speak(utterance);
+        }
+    }, [ttsState, activeSubModule, selectedVoice]);
+    
+    const handleStop = () => {
+        window.speechSynthesis.cancel();
+        setTtsState('idle');
+        setCurrentWordIndex(-1);
+    };
 
     if (!activeModule || !activeModule.content) return null;
-     
-    const parsedContent = (htmlString: string) => {
-        const doc = new DOMParser().parseFromString(htmlString, 'text/html');
-        doc.querySelectorAll('a').forEach(a => {
-            a.setAttribute('target', '_blank');
-            a.setAttribute('rel', 'noopener noreferrer');
-        });
-        return doc.body.innerHTML;
-    };
 
     return (
         <div className="relative">
@@ -874,7 +1034,6 @@ const ModuleView: React.FC<{
            <p className="text-text-secondary mb-8">Select a topic from the outline below to begin your study session.</p>
            
            <div className="flex flex-col md:flex-row gap-8 lg:gap-12">
-               {/* Left Sidebar - STICKY */}
                <aside className="md:w-1/3 lg:w-1/4 md:sticky top-24 self-start">
                    <div className="bg-secondary p-4 rounded-lg border border-border-color">
                        <h3 className="font-bold text-text-primary mb-4 text-lg">Module Outline</h3>
@@ -899,15 +1058,24 @@ const ModuleView: React.FC<{
                    </div>
                </aside>
 
-               {/* Right Content Pane */}
                <main className="md:w-2/3 lg:w-3/4 min-w-0">
                    {activeSubModule ? (
                         <section>
-                            <h3 className="text-2xl font-bold text-text-primary mb-4 pb-2 border-b border-border-color">{activeSubModule.title}</h3>
+                            <div className="flex justify-between items-center mb-4 pb-2 border-b border-border-color">
+                                <h3 className="text-2xl font-bold text-text-primary">{activeSubModule.title}</h3>
+                                <div className="flex items-center space-x-2">
+                                    <button onClick={handlePlayPause} className="p-2 text-text-secondary hover:text-accent transition-colors" title={ttsState === 'playing' ? 'Pause' : 'Play'}>
+                                        {ttsState === 'playing' ? <PauseIcon className="w-6 h-6"/> : <PlayIcon className="w-6 h-6"/>}
+                                    </button>
+                                    <button onClick={handleStop} disabled={ttsState === 'idle'} className="p-2 text-text-secondary hover:text-red-500 transition-colors disabled:opacity-50" title="Stop">
+                                        <StopIcon className="w-6 h-6"/>
+                                    </button>
+                                </div>
+                            </div>
                             <div
                                 ref={contentRef}
                                 className="prose prose-lg max-w-none prose-headings:text-text-primary prose-p:text-text-primary prose-a:text-accent prose-blockquote:text-text-secondary prose-strong:text-text-primary prose-li:text-text-primary"
-                                dangerouslySetInnerHTML={{ __html: parsedContent(window.marked.parse(activeSubModule.content)) }}
+                                dangerouslySetInnerHTML={{ __html: parsedContent }}
                             ></div>
                         </section>
                    ) : (
@@ -922,7 +1090,6 @@ const ModuleView: React.FC<{
                 </button>
            </div>
             
-            {/* AI Tutor FAB */}
             <button
                 onClick={() => setIsDoubtModalOpen(true)}
                 className="fixed bottom-8 right-8 bg-accent text-white p-4 rounded-full shadow-2xl hover:bg-highlight transition-transform hover:scale-110 z-30 flex items-center gap-2"
@@ -992,30 +1159,21 @@ const QuizView: React.FC<{
             <p className="text-center text-text-secondary font-semibold mb-4">Question {currentQuestionIndex + 1} of {quiz.questions.length}</p>
 
             <div ref={questionContainerRef} className="bg-secondary p-8 rounded-lg border border-border-color min-h-[300px]">
-                <p className="font-semibold text-lg mb-6">{q.question.replace('___', '______')}</p>
-                {q.type === QuizType.FIB ? (
-                    <input
-                        type="text"
-                        value={answers[currentQuestionIndex]?.[0] || ''}
-                        onChange={e => handleAnswerChange(currentQuestionIndex, e.target.value, q.type)}
-                        className="w-full bg-primary p-3 rounded-lg border border-border-color focus:ring-2 focus:ring-accent focus:outline-none"
-                    />
-                ) : (
-                    <div className="space-y-3">
-                        {q.options?.map((option, oIndex) => (
-                            <label key={oIndex} className="flex items-center p-4 rounded-lg hover:bg-primary cursor-pointer border border-transparent has-[:checked]:bg-accent/10 has-[:checked]:border-accent transition-all">
-                                <input
-                                    type={q.type === QuizType.MSQ ? 'checkbox' : 'radio'}
-                                    name={`q-${currentQuestionIndex}`}
-                                    checked={answers[currentQuestionIndex]?.includes(option)}
-                                    onChange={() => handleAnswerChange(currentQuestionIndex, option, q.type)}
-                                    className="h-5 w-5 text-accent border-gray-300 focus:ring-accent"
-                                />
-                                <span className="ml-4 text-text-primary">{option}</span>
-                            </label>
-                        ))}
-                    </div>
-                )}
+                <p className="font-semibold text-lg mb-6">{q.question}</p>
+                <div className="space-y-3">
+                    {q.options?.map((option, oIndex) => (
+                        <label key={oIndex} className="flex items-center p-4 rounded-lg hover:bg-primary cursor-pointer border border-transparent has-[:checked]:bg-accent/10 has-[:checked]:border-accent transition-all">
+                            <input
+                                type={q.type === QuizType.MSQ ? 'checkbox' : 'radio'}
+                                name={`q-${currentQuestionIndex}`}
+                                checked={answers[currentQuestionIndex]?.includes(option)}
+                                onChange={() => handleAnswerChange(currentQuestionIndex, option, q.type)}
+                                className="h-5 w-5 text-accent border-gray-300 focus:ring-accent"
+                            />
+                            <span className="ml-4 text-text-primary">{option}</span>
+                        </label>
+                    ))}
+                </div>
             </div>
 
             {/* Navigation */}
@@ -1047,9 +1205,11 @@ const QuizView: React.FC<{
 const QuizResultsView: React.FC<{
     score: number;
     totalQuestions: number;
-    setView: (view: 'course' | 'path') => void;
+    attempts: number;
+    setView: (view: 'course' | 'path' | 'quiz_answers') => void;
+    onShowAnswers: () => void;
     isPath: boolean;
-}> = ({ score, totalQuestions, setView, isPath }) => {
+}> = ({ score, totalQuestions, attempts, setView, onShowAnswers, isPath }) => {
     const percentage = Math.round((score / totalQuestions) * 100);
     const passed = percentage >= 80;
 
@@ -1073,11 +1233,70 @@ const QuizResultsView: React.FC<{
                     <p className="text-text-secondary">You need a score of 80% or higher to unlock the next module. Please review the material and try again.</p>
                 </div>
             )}
+            
+            {!passed && attempts >= 3 && (
+                 <div className="mt-6 p-4 bg-primary rounded-lg border border-border-color">
+                    <p className="text-text-secondary mb-2">You've attempted this quiz {attempts} times.</p>
+                    <button onClick={onShowAnswers} className="text-accent underline font-semibold hover:text-highlight">
+                        Need help? Show Correct Answers
+                    </button>
+                </div>
+            )}
+
             <button onClick={() => setView(isPath ? 'path' : 'course')} className="mt-8 bg-accent text-white font-bold py-3 px-6 rounded-lg hover:bg-highlight transition-all">
                 Back to {isPath ? 'Learning Path' : 'Course'}
             </button>
         </div>
     )
+};
+
+const QuizAnswersView: React.FC<{
+    quiz: Quiz;
+    setView: (view: 'course' | 'path') => void;
+    isPath: boolean;
+}> = ({ quiz, setView, isPath }) => {
+    const contentRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (contentRef.current && window.MathJax) {
+            try {
+                window.MathJax.typeset();
+            } catch (error) {
+                console.error("MathJax rendering error in QuizAnswersView:", error);
+            }
+        }
+    }, [quiz]);
+
+    return (
+        <div className="max-w-4xl mx-auto" ref={contentRef}>
+            <h2 className="text-3xl font-bold mb-2 text-center">{quiz.title} - Correct Answers</h2>
+            <p className="text-text-secondary text-center mb-8">Review the correct answers below to improve your understanding.</p>
+
+            <div className="space-y-6">
+                {quiz.questions.map((q, qIndex) => (
+                    <div key={qIndex} className="bg-secondary p-6 rounded-lg border border-border-color">
+                        <p className="font-semibold text-lg mb-4">({qIndex + 1}) {q.question}</p>
+                        <div className="space-y-3">
+                            {q.options?.map((option, oIndex) => {
+                                const isCorrect = q.correctAnswers.includes(option);
+                                return (
+                                    <div key={oIndex} className={`flex items-start p-3 rounded-lg border ${isCorrect ? 'bg-green-500/10 border-green-500/30' : 'bg-primary border-transparent'}`}>
+                                        <span className={`mr-3 font-bold ${isCorrect ? 'text-green-600' : 'text-text-secondary'}`}>{isCorrect ? '✔' : '•'}</span>
+                                        <span className={`${isCorrect ? 'text-green-700 font-semibold' : 'text-text-primary'}`}>{option}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                ))}
+            </div>
+             <div className="text-center mt-8">
+                <button onClick={() => setView(isPath ? 'path' : 'course')} className="bg-accent text-white font-bold py-3 px-6 rounded-lg hover:bg-highlight transition-all">
+                    Back to {isPath ? 'Learning Path' : 'Course'}
+                </button>
+            </div>
+        </div>
+    );
 };
 
 const MockTestResultsView: React.FC<{
@@ -1240,7 +1459,7 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
     const [activePath, setActivePath] = useState<LearningPath | null>(null);
     const [activeCourse, setActiveCourse] = useState<Course | null>(null);
     const [activeModule, setActiveModule] = useState<{ module: Module, index: number } | null>(null);
-    const [view, setView] = useState<'dashboard' | 'create-hub' | 'create-topic' | 'create-document' | 'create-path' | 'path' | 'course' | 'module' | 'quiz' | 'quiz_results' | 'loading' | 'profile' | 'mock_test' | 'mock_test_results'>('dashboard');
+    const [view, setView] = useState<'dashboard' | 'create-hub' | 'create-topic' | 'create-document' | 'create-path' | 'path' | 'course' | 'module' | 'quiz' | 'quiz_results' | 'quiz_answers' | 'loading' | 'profile' | 'mock_test' | 'mock_test_results'>('dashboard');
     
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -1286,7 +1505,7 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
                 id: new Date().toISOString(),
                 ...outline,
                 isCompleted: false,
-                modules: outline.modules.map((m: any) => ({ ...m, isCompleted: false, generationState: GenerationState.LOCKED })),
+                modules: outline.modules.map((m: any) => ({ ...m, isCompleted: false, generationState: GenerationState.LOCKED, quizAttempts: 0 })),
                 unlockedModuleIndex: 0
             };
             
@@ -1326,7 +1545,8 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
                     modules: c.modules.map((m: any) => ({
                         ...m,
                         isCompleted: false,
-                        generationState: GenerationState.LOCKED
+                        generationState: GenerationState.LOCKED,
+                        quizAttempts: 0
                     }))
                 }))
             };
@@ -1392,43 +1612,49 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
         const percentage = Math.round((score / quiz.questions.length) * 100);
         setQuizScore({ score, total: quiz.questions.length });
 
-        if (percentage >= 80) {
-            const courseUpdater = (c: Course) => {
-                if (c.id !== activeCourse.id) return c;
-                
-                const updatedModules = c.modules.map((m, i) => i === activeModule.index ? { ...m, isCompleted: true, quizScore: percentage } : m);
-                
-                let newUnlockedIndex = c.unlockedModuleIndex === activeModule.index ? c.unlockedModuleIndex + 1 : c.unlockedModuleIndex;
-
-                let updatedCourse = { ...c, modules: updatedModules, unlockedModuleIndex: newUnlockedIndex };
-                
-                const isCourseComplete = updatedModules.every(m => m.isCompleted);
-                if (isCourseComplete) {
-                    updatedCourse.isCompleted = true;
-                }
-                setActiveCourse(updatedCourse);
-                return updatedCourse;
-            };
-
-            setCourses(prev => prev.map(courseUpdater));
+        const courseUpdater = (c: Course) => {
+            if (c.id !== activeCourse.id) return c;
             
-            if (activePath) {
-                setLearningPaths(prevPaths => prevPaths.map(p => {
-                    if (p.id !== activePath.id) return p;
-                    
-                    const updatedPathCourses = p.courses.map(courseUpdater);
-                    const currentCourseIndex = updatedPathCourses.findIndex(c => c.id === activeCourse.id);
-                    let newUnlockedCourseIndex = p.unlockedCourseIndex;
-
-                    if (currentCourseIndex !== -1 && updatedPathCourses[currentCourseIndex].isCompleted && currentCourseIndex === p.unlockedCourseIndex) {
-                        newUnlockedCourseIndex++;
-                    }
-                    
-                    const updatedPath = { ...p, courses: updatedPathCourses, unlockedCourseIndex: newUnlockedCourseIndex };
-                    setActivePath(updatedPath);
-                    return updatedPath;
-                }));
+            let updatedModules;
+            if (percentage >= 80) {
+                 updatedModules = c.modules.map((m, i) => i === activeModule.index ? { ...m, isCompleted: true, quizScore: percentage, quizAttempts: 0 } : m);
+            } else {
+                 updatedModules = c.modules.map((m, i) => i === activeModule.index ? { ...m, quizAttempts: (m.quizAttempts || 0) + 1 } : m);
             }
+
+            let newUnlockedIndex = c.unlockedModuleIndex;
+            if (percentage >= 80 && c.unlockedModuleIndex === activeModule.index) {
+                newUnlockedIndex = c.unlockedModuleIndex + 1;
+            }
+
+            let updatedCourse = { ...c, modules: updatedModules, unlockedModuleIndex: newUnlockedIndex };
+            
+            const isCourseComplete = updatedModules.every(m => m.isCompleted);
+            if (isCourseComplete) {
+                updatedCourse.isCompleted = true;
+            }
+            setActiveCourse(updatedCourse);
+            return updatedCourse;
+        };
+
+        setCourses(prev => prev.map(courseUpdater));
+        
+        if (activePath) {
+            setLearningPaths(prevPaths => prevPaths.map(p => {
+                if (p.id !== activePath.id) return p;
+                
+                const updatedPathCourses = p.courses.map(courseUpdater);
+                const currentCourseIndex = updatedPathCourses.findIndex(c => c.id === activeCourse.id);
+                let newUnlockedCourseIndex = p.unlockedCourseIndex;
+
+                if (currentCourseIndex !== -1 && updatedPathCourses[currentCourseIndex].isCompleted && currentCourseIndex === p.unlockedCourseIndex) {
+                    newUnlockedCourseIndex++;
+                }
+                
+                const updatedPath = { ...p, courses: updatedPathCourses, unlockedCourseIndex: newUnlockedCourseIndex };
+                setActivePath(updatedPath);
+                return updatedPath;
+            }));
         }
         
         setView('quiz_results');
@@ -1524,9 +1750,9 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
     };
     
     const setAppView = (
-        newView: 'dashboard' | 'create-hub' | 'create-topic' | 'create-document' | 'create-path' | 'path' | 'course' | 'module' | 'quiz' | 'quiz_results' | 'loading' | 'profile' | 'mock_test' | 'mock_test_results'
+        newView: 'dashboard' | 'create-hub' | 'create-topic' | 'create-document' | 'create-path' | 'path' | 'course' | 'module' | 'quiz' | 'quiz_results' | 'quiz_answers' | 'loading' | 'profile' | 'mock_test' | 'mock_test_results'
     ) => {
-        if (!['course', 'module', 'quiz', 'quiz_results', 'mock_test', 'mock_test_results'].includes(newView)) {
+        if (!['course', 'module', 'quiz', 'quiz_results', 'quiz_answers', 'mock_test', 'mock_test_results'].includes(newView)) {
             setActiveCourse(null);
             setActiveModule(null);
         }
@@ -1550,39 +1776,42 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
 
         switch (view) {
             case 'dashboard':
-                return <Dashboard courses={courses} learningPaths={learningPaths} setView={(v) => setAppView(v)} setActiveCourse={setActiveCourse} setActivePath={setActivePath} />;
+                return <Dashboard courses={courses} learningPaths={learningPaths} setView={(v) => setAppView(v as any)} setActiveCourse={setActiveCourse} setActivePath={setActivePath} />;
             case 'profile':
                 return <ProfileView user={user} courses={[...courses, ...learningPaths.flatMap(p => p.courses)]} updateUser={updateUser} />;
             case 'create-hub':
-                 return <CreationHub setView={(v) => setAppView(v)} />;
+                 return <CreationHub setView={(v) => setAppView(v as any)} />;
             case 'create-topic':
-                return <TopicCreator handleCreateCourse={handleCreateCourse} setView={(v) => setAppView(v)} loading={loading} setError={setError} />;
+                return <TopicCreator handleCreateCourse={handleCreateCourse} setView={(v) => setAppView(v as any)} loading={loading} setError={setError} />;
             case 'create-path':
-                return <PathCreator handleCreatePath={handleCreateLearningPath} setView={(v) => setAppView(v)} loading={loading} setError={setError} />;
+                return <PathCreator handleCreatePath={handleCreateLearningPath} setView={(v) => setAppView(v as any)} loading={loading} setError={setError} />;
             case 'create-document':
-                return <DocumentCreator handleCreateCourse={handleCreateCourse} setView={(v) => setAppView(v)} loading={loading} setError={setError} />;
+                return <DocumentCreator handleCreateCourse={handleCreateCourse} setView={(v) => setAppView(v as any)} loading={loading} setError={setError} />;
             case 'path':
-                if (activePath) return <PathView activePath={activePath} setView={(v) => setAppView(v)} setActiveCourse={setActiveCourse} />;
+                if (activePath) return <PathView activePath={activePath} setView={(v) => setAppView(v as any)} setActiveCourse={setActiveCourse} />;
                 break;
             case 'course':
-                if (activeCourse) return <CourseView activeCourse={activeCourse} setView={(v) => setAppView(v)} setActiveModule={setViewAndActiveModule} handleGenerateModule={handleGenerateModule} handleGenerateMockTest={handleGenerateMockTest} />;
+                if (activeCourse) return <CourseView activeCourse={activeCourse} setView={(v) => setAppView(v as any)} setActiveModule={setViewAndActiveModule} handleGenerateModule={handleGenerateModule} handleGenerateMockTest={handleGenerateMockTest} />;
                 break;
             case 'module':
-                if (activeModule) return <ModuleView activeModule={activeModule.module} apiKey={user.apiKey!} setView={(v) => setAppView(v)} />;
+                if (activeModule) return <ModuleView activeModule={activeModule.module} apiKey={user.apiKey!} setView={(v) => setAppView(v as any)} />;
                 break;
             case 'quiz':
                 if (activeModule?.module.quiz) return <QuizView quiz={activeModule.module.quiz} handleQuizSubmit={handleQuizSubmit} />;
                 break;
-             case 'quiz_results':
-                return <QuizResultsView score={quizScore.score} totalQuestions={quizScore.total} setView={(v) => setAppView(v)} isPath={!!activePath} />;
+            case 'quiz_results':
+                return <QuizResultsView score={quizScore.score} totalQuestions={quizScore.total} setView={(v) => setAppView(v as any)} isPath={!!activePath} attempts={activeModule?.module.quizAttempts || 0} onShowAnswers={() => setView('quiz_answers')} />;
+            case 'quiz_answers':
+                 if (activeModule?.module.quiz) return <QuizAnswersView quiz={activeModule.module.quiz} setView={(v) => setAppView(v as any)} isPath={!!activePath} />;
+                 break;
             case 'mock_test':
                 if (activeCourse?.mockTest) return <QuizView quiz={activeCourse.mockTest} handleQuizSubmit={handleMockTestSubmit} isMockTest={true} />;
                 break;
             case 'mock_test_results':
-                return <MockTestResultsView score={mockTestScore.score} totalQuestions={mockTestScore.total} badge={activeCourse?.badge} setView={(v) => setAppView(v)} isPath={!!activePath} />;
+                return <MockTestResultsView score={mockTestScore.score} totalQuestions={mockTestScore.total} badge={activeCourse?.badge} setView={(v) => setAppView(v as any)} isPath={!!activePath} />;
         }
         // Default to dashboard
-        return <Dashboard courses={courses} learningPaths={learningPaths} setView={(v) => setAppView(v)} setActiveCourse={setActiveCourse} setActivePath={setActivePath} />;
+        return <Dashboard courses={courses} learningPaths={learningPaths} setView={(v) => setAppView(v as any)} setActiveCourse={setActiveCourse} setActivePath={setActivePath} />;
     };
 
     return (
@@ -1592,7 +1821,7 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
                 courses={courses}
                 learningPaths={learningPaths}
                 activeItemId={activeCourse?.id || activePath?.id || null}
-                setView={(v) => setAppView(v)}
+                setView={(v) => setAppView(v as any)}
                 setActiveCourse={setActiveCourse}
                 setActivePath={setActivePath}
             />
@@ -1601,7 +1830,7 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
                     toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
                     user={user}
                     logout={logout}
-                    setView={(v) => setAppView(v)}
+                    setView={(v) => setAppView(v as any)}
                 />
                 <main className="flex-1 p-8 overflow-y-auto">
                     <Breadcrumbs 
@@ -1609,7 +1838,7 @@ export const MainApp: React.FC<MainAppProps> = ({ user, logout, updateUser }) =>
                         activePath={activePath}
                         activeCourse={activeCourse}
                         activeModule={activeModule}
-                        setView={(v) => setAppView(v)}
+                        setView={(v) => setAppView(v as any)}
                         setActiveCourse={setActiveCourse}
                         setActivePath={setActivePath}
                     />

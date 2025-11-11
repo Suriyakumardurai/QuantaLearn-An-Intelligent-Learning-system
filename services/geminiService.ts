@@ -64,10 +64,10 @@ const quizSchema = {
         properties: {
           question: { type: Type.STRING },
           type: { type: Type.STRING, enum: [QuizType.MCQ, QuizType.MSQ] },
-          options: { type: Type.ARRAY, items: { type: Type.STRING }, nullable: true },
+          options: { type: Type.ARRAY, items: { type: Type.STRING } },
           correctAnswers: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
-        required: ['question', 'type', 'correctAnswers'],
+        required: ['question', 'type', 'options', 'correctAnswers'],
       },
     },
   },
@@ -183,6 +183,7 @@ export const generateModuleContentAndQuiz = async (apiKey: string, courseTitle: 
     - The "quiz" value must be a JSON object matching the provided quiz schema.
     - Create a quiz with 5-7 questions based *only* on the content you have just generated.
     - The quiz must include a mix of question types: Multiple Choice (MCQ) and Multiple Select (MSQ).
+    - **CRITICAL: DO NOT generate any "fill-in-the-blank" or open-ended questions. Every question must have a list of options.**
     `;
     
     const prompt = `Generate the content and a quiz for the module "${moduleTitle}" which is part of the course "${courseTitle}".`;
@@ -217,6 +218,7 @@ export const generateMockTest = async (apiKey: string, courseTitle: string, modu
     - The test should have a minimum of 10 questions to be comprehensive.
     - The questions must be based on the collective titles and objectives of ALL modules in the course.
     - The quiz must include a mix of question types: Multiple Choice (MCQ) and Multiple Select (MSQ).
+    - **CRITICAL: DO NOT generate any "fill-in-the-blank" or open-ended questions. Every question must have a list of options.**
     - Ensure all mathematical notations in questions and options are formatted using LaTeX.
     - The difficulty should be appropriate for a final assessment to test mastery.
     `;

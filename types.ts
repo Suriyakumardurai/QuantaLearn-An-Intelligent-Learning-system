@@ -16,7 +16,7 @@ export enum QuizType {
 export interface Question {
   question: string;
   type: QuizType;
-  options?: string[];
+  options: string[];
   correctAnswers: string[];
 }
 

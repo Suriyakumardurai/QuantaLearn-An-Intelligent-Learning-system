@@ -1161,7 +1161,7 @@ const QuizView: React.FC<{
             <div ref={questionContainerRef} className="bg-secondary p-8 rounded-lg border border-border-color min-h-[300px]">
                 <p className="font-semibold text-lg mb-6">{q.question}</p>
                 <div className="space-y-3">
-                    {q.options?.map((option, oIndex) => (
+                    {q.options.map((option, oIndex) => (
                         <label key={oIndex} className="flex items-center p-4 rounded-lg hover:bg-primary cursor-pointer border border-transparent has-[:checked]:bg-accent/10 has-[:checked]:border-accent transition-all">
                             <input
                                 type={q.type === QuizType.MSQ ? 'checkbox' : 'radio'}
@@ -1277,7 +1277,7 @@ const QuizAnswersView: React.FC<{
                     <div key={qIndex} className="bg-secondary p-6 rounded-lg border border-border-color">
                         <p className="font-semibold text-lg mb-4">({qIndex + 1}) {q.question}</p>
                         <div className="space-y-3">
-                            {q.options?.map((option, oIndex) => {
+                            {q.options.map((option, oIndex) => {
                                 const isCorrect = q.correctAnswers.includes(option);
                                 return (
                                     <div key={oIndex} className={`flex items-start p-3 rounded-lg border ${isCorrect ? 'bg-green-500/10 border-green-500/30' : 'bg-primary border-transparent'}`}>

@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Course, User, Module, Quiz, Question, QuizType, GenerationState, Badge, LearningPath } from '../types';
 import { generateCourseOutline, generateModuleContentAndQuiz, clarifyDoubt, generateLearningPathOutline, generateMockTest } from '../services/geminiService';
@@ -822,11 +823,17 @@ const ModuleView: React.FC<{
         };
     }, []);
 
+    const processedContent = useMemo(() => {
+        if (!activeModule?.content) return '';
+        // Fix for escaped newlines from Gemini response.
+        return activeModule.content.replace(/\\n/g, '\n');
+    }, [activeModule?.content]);
+
     const subModules = useMemo(() => {
-        if (!activeModule?.content) return [];
+        if (!processedContent) return [];
         
         const parsedSubModules: { title: string; content: string }[] = [];
-        const contentParts = activeModule.content.split(/\n## /); 
+        const contentParts = processedContent.split(/\n## /); 
         
         const introContent = contentParts[0]?.trim();
         if (introContent && !introContent.startsWith('## ')) {
@@ -845,7 +852,7 @@ const ModuleView: React.FC<{
         }
     
         contentParts.forEach((part, index) => {
-            if (index === 0 && !activeModule.content.startsWith('## ')) return;
+            if (index === 0 && !processedContent.startsWith('## ')) return;
 
             const contentToParse = index === 0 ? part.substring(3) : part;
             
@@ -862,7 +869,7 @@ const ModuleView: React.FC<{
     
         return parsedSubModules;
 
-    }, [activeModule?.content]);
+    }, [processedContent]);
     
     const [activeSubModuleTitle, setActiveSubModuleTitle] = useState<string>('');
 
